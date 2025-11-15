@@ -90,17 +90,31 @@ if USE_CLOUD_SQL:
         }
     }
 else:
-    # Local PostgreSQL configuration
-    DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': env('DATABASE_NAME', default='greweco_db'),
-            'USER': env('DATABASE_USER', default='postgres'),
-            'PASSWORD': env('DATABASE_PASSWORD', default='postgres'),
-            'HOST': env('DATABASE_HOST', default='localhost'),
-            'PORT': env('DATABASE_PORT', default='5432'),
+    # Local database configuration
+    # Use SQLite for easier local development (no PostgreSQL setup needed)
+    # Or use PostgreSQL if DATABASE_HOST is set
+    DATABASE_HOST = env('DATABASE_HOST', default='')
+    
+    if DATABASE_HOST:
+        # Local PostgreSQL configuration
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.postgresql',
+                'NAME': env('DATABASE_NAME', default='greweco_db'),
+                'USER': env('DATABASE_USER', default='postgres'),
+                'PASSWORD': env('DATABASE_PASSWORD', default='postgres'),
+                'HOST': DATABASE_HOST,
+                'PORT': env('DATABASE_PORT', default='5432'),
+            }
         }
-    }
+    else:
+        # SQLite for local development (no setup needed)
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / 'db.sqlite3',
+            }
+        }
 
 # Password validation
 # https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators

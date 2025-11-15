@@ -32,6 +32,48 @@ class BuyerViewSet(viewsets.ModelViewSet):
         if self.action in ['list', 'retrieve']:
             return [IsAuthenticated()]
         return [IsAdminUser()]
+    
+    def get_queryset(self):
+        """Filter by buyer type if specified."""
+        queryset = Buyer.objects.all()
+        buyer_type = self.request.query_params.get('buyer_type', None)
+        if buyer_type:
+            queryset = queryset.filter(buyer_type=buyer_type)
+        return queryset
+
+    @action(detail=True, methods=['post'])
+    def upload_logo(self, request, pk=None):
+        """Upload company logo for B2B buyer."""
+        buyer = self.get_object()
+        
+        if buyer.buyer_type != 'b2b':
+            return Response(
+                {'error': 'Logo upload is only available for B2B buyers'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if 'logo' not in request.FILES:
+            return Response(
+                {'error': 'No logo file provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            from apps.core.utils.logo_uploader import upload_company_logo
+            logo_file = request.FILES['logo']
+            logo_url = upload_company_logo(logo_file, buyer.id, buyer.company_name or 'company')
+            
+            buyer.company_logo = logo_url
+            buyer.save(update_fields=['company_logo'])
+            
+            return Response({
+                'message': 'Logo uploaded successfully',
+                'logo_url': logo_url
+            }, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                'error': f'Failed to upload logo: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class PlantationViewSet(viewsets.ModelViewSet):
@@ -39,6 +81,14 @@ class PlantationViewSet(viewsets.ModelViewSet):
     queryset = Plantation.objects.all()
     serializer_class = PlantationSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        """Filter by sector if specified."""
+        queryset = Plantation.objects.all()
+        sector = self.request.query_params.get('sector', None)
+        if sector:
+            queryset = queryset.filter(sector__in=[sector, 'mixed'])
+        return queryset
 
     @action(detail=True, methods=['get'])
     def co2_calculation(self, request, pk=None):
@@ -54,20 +104,33 @@ class PlantationViewSet(viewsets.ModelViewSet):
         return Response({
             'plantation_id': plantation.id,
             'plantation_name': plantation.name,
+            'sector': plantation.sector,
             'age_years': round(age_years, 2),
             'total_hectares': float(plantation.total_hectares),
             'total_trees': plantation.get_total_trees(),
             'available_trees': plantation.get_available_trees(),
             'yearly_co2_absorbed_kg': float(co2_per_year),
-            'price_per_tree': float(plantation.price_per_tree),
-            'price_per_hectare': float(plantation.price_per_hectare),
+            'b2b_pricing': {
+                'price_per_tree': float(plantation.b2b_price_per_tree),
+                'price_per_hectare': float(plantation.b2b_price_per_hectare),
+            },
+            'b2c_pricing': {
+                'price_per_tree': float(plantation.b2c_price_per_tree),
+                'price_per_hectare': float(plantation.b2c_price_per_hectare),
+            },
         })
 
     @action(detail=True, methods=['get'])
     def available_lots(self, request, pk=None):
-        """Get available tree lots for this plantation."""
+        """Get available tree lots for this plantation, optionally filtered by sector."""
         plantation = self.get_object()
         lots = TreeLot.objects.filter(plantation=plantation, is_available=True)
+        
+        # Filter by sector if specified
+        sector = request.query_params.get('sector', None)
+        if sector:
+            lots = lots.filter(sector=sector)
+        
         serializer = TreeLotSerializer(lots, many=True)
         return Response(serializer.data)
 
@@ -79,11 +142,14 @@ class TreeLotViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        """Filter by plantation and availability."""
+        """Filter by plantation, sector, and availability."""
         queryset = TreeLot.objects.all()
         plantation_id = self.request.query_params.get('plantation', None)
         if plantation_id:
             queryset = queryset.filter(plantation_id=plantation_id)
+        sector = self.request.query_params.get('sector', None)
+        if sector:
+            queryset = queryset.filter(sector=sector)
         available_only = self.request.query_params.get('available', 'false').lower() == 'true'
         if available_only:
             queryset = queryset.filter(is_available=True)
@@ -114,6 +180,24 @@ class TreePurchaseViewSet(viewsets.ModelViewSet):
                 {'error': 'Purchase is not pending'},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        # Verify buyer type matches lot sector
+        buyer_type = purchase.buyer.buyer_type
+        lot_sector = purchase.tree_lot.sector
+        
+        # B2B buyers can only buy B2B lots, B2C buyers can only buy B2C lots
+        if buyer_type != lot_sector:
+            return Response(
+                {'error': f'Buyer type ({buyer_type}) does not match lot sector ({lot_sector})'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Use correct price based on buyer type
+        correct_price = purchase.tree_lot.get_price_for_buyer_type(buyer_type)
+        if purchase.price_per_tree * purchase.quantity != correct_price:
+            purchase.price_per_tree = correct_price / purchase.quantity
+            purchase.total_price = correct_price
+            purchase.save()
         
         # Mark purchase as completed
         purchase.status = 'completed'

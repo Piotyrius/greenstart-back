@@ -15,8 +15,13 @@ class BuyerSerializer(serializers.ModelSerializer):
     class Meta:
         model = Buyer
         fields = [
-            'id', 'name', 'email', 'company_name', 'buyer_type',
-            'country', 'iso_standards', 'created_at',
+            'id', 'name', 'email', 'buyer_type', 'created_at',
+            # B2B fields
+            'company_name', 'company_logo', 'country', 'iso_standards',
+            'tax_id', 'website',
+            # B2C fields
+            'phone', 'address',
+            # Computed
             'purchases_count', 'total_trees_purchased'
         ]
         read_only_fields = ['id', 'created_at']
@@ -26,6 +31,14 @@ class BuyerSerializer(serializers.ModelSerializer):
         return sum(
             purchase.quantity for purchase in obj.purchases.filter(status='completed')
         )
+    
+    def validate(self, data):
+        """Validate B2B requires company_name."""
+        if data.get('buyer_type') == 'b2b' and not data.get('company_name'):
+            raise serializers.ValidationError({
+                'company_name': 'Company name is required for B2B buyers.'
+            })
+        return data
 
 
 class PlantationSerializer(serializers.ModelSerializer):
@@ -33,15 +46,24 @@ class PlantationSerializer(serializers.ModelSerializer):
     total_trees = serializers.SerializerMethodField()
     available_trees = serializers.SerializerMethodField()
     tree_lots_count = serializers.IntegerField(source='tree_lots.count', read_only=True)
+    b2b_lots_count = serializers.SerializerMethodField()
+    b2c_lots_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Plantation
         fields = [
             'id', 'name', 'polygon_coordinates', 'planting_date',
             'expected_harvest_date', 'species', 'total_hectares',
-            'trees_per_hectare', 'price_per_tree', 'price_per_hectare',
+            'sector', 'trees_per_hectare',
+            # B2B pricing
+            'b2b_price_per_tree', 'b2b_price_per_hectare',
+            # B2C pricing
+            'b2c_price_per_tree', 'b2c_price_per_hectare',
+            # Legacy pricing (deprecated)
+            'price_per_tree', 'price_per_hectare',
             'is_active', 'created_at', 'yearly_co2_absorbed',
-            'total_trees', 'available_trees', 'tree_lots_count'
+            'total_trees', 'available_trees', 'tree_lots_count',
+            'b2b_lots_count', 'b2c_lots_count'
         ]
         read_only_fields = ['id', 'created_at']
 
@@ -57,6 +79,14 @@ class PlantationSerializer(serializers.ModelSerializer):
     def get_available_trees(self, obj):
         """Get available trees for sale."""
         return obj.get_available_trees()
+    
+    def get_b2b_lots_count(self, obj):
+        """Get count of B2B lots."""
+        return obj.tree_lots.filter(sector='b2b').count()
+    
+    def get_b2c_lots_count(self, obj):
+        """Get count of B2C lots."""
+        return obj.tree_lots.filter(sector='b2c').count()
 
     def validate_polygon_coordinates(self, value):
         """Validate polygon coordinates format."""
@@ -71,14 +101,17 @@ class PlantationSerializer(serializers.ModelSerializer):
 
 class TreeLotSerializer(serializers.ModelSerializer):
     plantation_name = serializers.CharField(source='plantation.name', read_only=True)
+    plantation_sector = serializers.CharField(source='plantation.sector', read_only=True)
     available_trees = serializers.SerializerMethodField()
 
     class Meta:
         model = TreeLot
         fields = [
-            'id', 'plantation', 'plantation_name', 'lot_number',
+            'id', 'plantation', 'plantation_name', 'plantation_sector',
+            'lot_number', 'sector',
             'area_polygon', 'area_hectares', 'number_of_trees',
-            'price', 'is_available', 'created_at', 'available_trees'
+            'b2b_price', 'b2c_price', 'price',  # price is legacy
+            'is_available', 'created_at', 'available_trees'
         ]
         read_only_fields = ['id', 'created_at']
 
@@ -119,12 +152,25 @@ class TreePurchaseSerializer(serializers.ModelSerializer):
 
     def get_buyer_info(self, obj):
         """Return buyer details."""
-        return {
-            'id': obj.buyer.id,
-            'company_name': obj.buyer.company_name,
-            'buyer_type': obj.buyer.buyer_type,
-            'country': obj.buyer.country,
+        buyer = obj.buyer
+        info = {
+            'id': buyer.id,
+            'buyer_type': buyer.buyer_type,
+            'name': buyer.name,
         }
+        if buyer.buyer_type == 'b2b':
+            info.update({
+                'company_name': buyer.company_name,
+                'company_logo': buyer.company_logo,
+                'country': buyer.country,
+                'website': buyer.website,
+            })
+        else:
+            info.update({
+                'phone': buyer.phone,
+                'address': buyer.address,
+            })
+        return info
 
     def get_tree_lot_info(self, obj):
         """Return tree lot details."""

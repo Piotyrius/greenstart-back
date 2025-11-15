@@ -10,25 +10,40 @@ from datetime import date
 
 class Buyer(models.Model):
     """
-    Buyer model - represents developers or companies purchasing trees.
-    Can be a developer (construction company) or foreign company (for ISO compliance).
+    Buyer model - represents B2B companies or B2C individuals purchasing trees.
+    B2B: Companies, developers, foreign companies (for ISO compliance)
+    B2C: Individual consumers
     """
     BUYER_TYPE_CHOICES = [
-        ('developer', 'Developer/Construction Company'),
-        ('company', 'Foreign Company (ISO Compliance)'),
+        ('b2b', 'B2B - Business/Company'),
+        ('b2c', 'B2C - Individual Consumer'),
     ]
     
-    name = models.CharField(max_length=255)
+    # Common fields
+    name = models.CharField(max_length=255, help_text="Contact person name (B2B) or full name (B2C)")
     email = models.EmailField(unique=True)
-    company_name = models.CharField(max_length=255)
-    buyer_type = models.CharField(max_length=20, choices=BUYER_TYPE_CHOICES, default='developer')
+    buyer_type = models.CharField(max_length=10, choices=BUYER_TYPE_CHOICES, default='b2b')
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    # B2B specific fields
+    company_name = models.CharField(max_length=255, blank=True, help_text="Required for B2B")
+    company_logo = models.URLField(
+        blank=True,
+        null=True,
+        help_text="URL to company logo image (stored in Google Cloud Storage)"
+    )
     country = models.CharField(max_length=100, blank=True, help_text="For foreign companies")
     iso_standards = models.JSONField(
         default=list,
         blank=True,
         help_text="ISO standards they need compliance for (e.g., ['ISO 14001', 'ISO 14064'])"
     )
-    created_at = models.DateTimeField(auto_now_add=True)
+    tax_id = models.CharField(max_length=100, blank=True, help_text="Company tax ID/VAT number")
+    website = models.URLField(blank=True, help_text="Company website")
+    
+    # B2C specific fields
+    phone = models.CharField(max_length=50, blank=True, help_text="Phone number (B2C)")
+    address = models.TextField(blank=True, help_text="Home address (B2C)")
 
     class Meta:
         ordering = ['-created_at']
@@ -36,14 +51,29 @@ class Buyer(models.Model):
         verbose_name_plural = "Buyers"
 
     def __str__(self):
-        return f"{self.company_name} ({self.get_buyer_type_display()})"
+        if self.buyer_type == 'b2b':
+            return f"{self.company_name or 'N/A'} ({self.get_buyer_type_display()})"
+        else:
+            return f"{self.name} ({self.get_buyer_type_display()})"
+    
+    def clean(self):
+        """Validate B2B requires company_name."""
+        from django.core.exceptions import ValidationError
+        if self.buyer_type == 'b2b' and not self.company_name:
+            raise ValidationError({'company_name': 'Company name is required for B2B buyers.'})
 
 
 class Plantation(models.Model):
     """
     Plantation model - represents paulownia tree plantations available for sale.
-    Trees are sold as NFTs to buyers.
+    Trees are sold as NFTs to buyers. Can be divided into B2B and B2C sectors.
     """
+    SECTOR_CHOICES = [
+        ('b2b', 'B2B - Business to Business'),
+        ('b2c', 'B2C - Business to Consumer'),
+        ('mixed', 'Mixed - Both B2B and B2C'),
+    ]
+    
     name = models.CharField(max_length=255)
     polygon_coordinates = models.JSONField(
         help_text="GeoJSON polygon coordinates for the plantation boundary"
@@ -56,21 +86,54 @@ class Plantation(models.Model):
         decimal_places=4,
         validators=[MinValueValidator(Decimal('0.0001'))]
     )
+    sector = models.CharField(
+        max_length=10,
+        choices=SECTOR_CHOICES,
+        default='mixed',
+        help_text="Sector type: B2B, B2C, or Mixed"
+    )
     trees_per_hectare = models.PositiveIntegerField(
         default=1000,
         help_text="Number of trees per hectare (for sale calculation)"
     )
+    # B2B pricing
+    b2b_price_per_tree = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="B2B price per tree in USD"
+    )
+    b2b_price_per_hectare = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="B2B price per hectare in USD"
+    )
+    # B2C pricing
+    b2c_price_per_tree = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="B2C price per tree in USD"
+    )
+    b2c_price_per_hectare = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="B2C price per hectare in USD"
+    )
+    # Legacy fields for backward compatibility
     price_per_tree = models.DecimalField(
         max_digits=10,
         decimal_places=2,
         default=Decimal('0.00'),
-        help_text="Price per tree in USD"
+        help_text="Default price per tree (deprecated - use b2b/b2c prices)"
     )
     price_per_hectare = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=Decimal('0.00'),
-        help_text="Price per hectare in USD"
+        help_text="Default price per hectare (deprecated - use b2b/b2c prices)"
     )
     is_active = models.BooleanField(
         default=True,
@@ -149,10 +212,21 @@ class Plantation(models.Model):
 class TreeLot(models.Model):
     """
     TreeLot model - represents a lot of trees/hectares available for purchase.
-    Each lot can be sold to a buyer.
+    Each lot can be sold to a buyer. Can be assigned to B2B or B2C sector.
     """
+    SECTOR_CHOICES = [
+        ('b2b', 'B2B - Business to Business'),
+        ('b2c', 'B2C - Business to Consumer'),
+    ]
+    
     plantation = models.ForeignKey(Plantation, on_delete=models.CASCADE, related_name='tree_lots')
     lot_number = models.CharField(max_length=50)
+    sector = models.CharField(
+        max_length=10,
+        choices=SECTOR_CHOICES,
+        default='b2b',
+        help_text="Sector this lot is assigned to (B2B or B2C)"
+    )
     area_polygon = models.JSONField(
         help_text="GeoJSON polygon coordinates for this lot"
     )
@@ -164,13 +238,35 @@ class TreeLot(models.Model):
     number_of_trees = models.PositiveIntegerField(
         help_text="Number of trees in this lot"
     )
+    # Pricing based on sector
+    b2b_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="B2B price for this lot"
+    )
+    b2c_price = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=Decimal('0.00'),
+        help_text="B2C price for this lot"
+    )
+    # Legacy field
     price = models.DecimalField(
         max_digits=12,
         decimal_places=2,
-        help_text="Total price for this lot"
+        default=Decimal('0.00'),
+        help_text="Default price (deprecated - use b2b/b2c prices)"
     )
     is_available = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    def get_price_for_buyer_type(self, buyer_type):
+        """Get price based on buyer type."""
+        if buyer_type == 'b2b':
+            return self.b2b_price if self.b2b_price > 0 else self.price
+        else:
+            return self.b2c_price if self.b2c_price > 0 else self.price
 
     class Meta:
         ordering = ['lot_number']

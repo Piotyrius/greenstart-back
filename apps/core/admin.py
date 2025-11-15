@@ -7,17 +7,30 @@ from apps.core.models import (
 
 @admin.register(Buyer)
 class BuyerAdmin(admin.ModelAdmin):
-    list_display = ['company_name', 'name', 'email', 'buyer_type', 'country', 'created_at']
+    list_display = ['company_name', 'name', 'email', 'buyer_type', 'country', 'has_logo', 'created_at']
     list_filter = ['buyer_type', 'created_at']
     search_fields = ['name', 'email', 'company_name', 'country']
-    readonly_fields = ['created_at']
+    readonly_fields = ['created_at', 'logo_preview']
     filter_horizontal = []
+    
+    def has_logo(self, obj):
+        return bool(obj.company_logo)
+    has_logo.boolean = True
+    has_logo.short_description = "Has Logo"
+    
+    def logo_preview(self, obj):
+        """Display logo preview in admin."""
+        if obj.company_logo:
+            return f'<img src="{obj.company_logo}" style="max-width: 200px; max-height: 200px;" />'
+        return "No logo"
+    logo_preview.allow_tags = True
+    logo_preview.short_description = "Logo Preview"
 
 
 @admin.register(Plantation)
 class PlantationAdmin(admin.ModelAdmin):
-    list_display = ['name', 'species', 'planting_date', 'total_hectares', 'price_per_tree', 'price_per_hectare', 'is_active', 'created_at']
-    list_filter = ['species', 'is_active', 'planting_date', 'created_at']
+    list_display = ['name', 'species', 'sector', 'planting_date', 'total_hectares', 'is_active', 'created_at']
+    list_filter = ['species', 'sector', 'is_active', 'planting_date', 'created_at']
     search_fields = ['name']
     readonly_fields = ['created_at', 'yearly_co2_display', 'total_trees_display', 'available_trees_display']
     
@@ -40,8 +53,8 @@ class PlantationAdmin(admin.ModelAdmin):
 
 @admin.register(TreeLot)
 class TreeLotAdmin(admin.ModelAdmin):
-    list_display = ['lot_number', 'plantation', 'number_of_trees', 'area_hectares', 'price', 'is_available', 'created_at']
-    list_filter = ['plantation', 'is_available', 'created_at']
+    list_display = ['lot_number', 'plantation', 'sector', 'number_of_trees', 'area_hectares', 'b2b_price', 'b2c_price', 'is_available', 'created_at']
+    list_filter = ['plantation', 'sector', 'is_available', 'created_at']
     search_fields = ['lot_number']
     readonly_fields = ['created_at']
     raw_id_fields = ['plantation']

@@ -124,13 +124,37 @@ def generate_certificate_pdf(nft_certificate):
     
     # Buyer details
     elements.append(Paragraph("Buyer Information", heading_style))
+    
+    # Add company logo for B2B buyers
+    if buyer.buyer_type == 'b2b' and buyer.company_logo:
+        try:
+            from reportlab.lib.utils import ImageReader
+            import requests
+            logo_response = requests.get(buyer.company_logo, timeout=5)
+            if logo_response.status_code == 200:
+                logo_img = Image(ImageReader(io.BytesIO(logo_response.content)), width=2*inch, height=0.5*inch)
+                elements.append(logo_img)
+                elements.append(Spacer(1, 0.1*inch))
+        except Exception:
+            pass  # Skip logo if can't load
+    
     buyer_data = [
-        ['Company Name:', buyer.company_name],
         ['Buyer Type:', buyer.get_buyer_type_display()],
         ['Contact:', buyer.name],
         ['Email:', buyer.email],
-        ['Country:', buyer.country or 'N/A'],
     ]
+    
+    if buyer.buyer_type == 'b2b':
+        buyer_data.extend([
+            ['Company Name:', buyer.company_name or 'N/A'],
+            ['Country:', buyer.country or 'N/A'],
+            ['Website:', buyer.website or 'N/A'],
+        ])
+    else:
+        buyer_data.extend([
+            ['Phone:', buyer.phone or 'N/A'],
+            ['Address:', buyer.address or 'N/A'],
+        ])
     
     buyer_table = Table(buyer_data, colWidths=[2*inch, 4*inch])
     buyer_table.setStyle(TableStyle([
